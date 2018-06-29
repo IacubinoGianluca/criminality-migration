@@ -1,0 +1,1010 @@
+---
+title: "Criminalità e immigrazione: fenomeni in relazione o strumento di proaganda?"
+author: "Gianluca Iacubino"
+output: 
+    html_document:
+       df_print: paged
+       theme: cerulean
+       toc: true
+       number_sections: true
+       toc_depth: 4
+editor_options: 
+  chunk_output_type: console
+---
+
+
+```{r setup, include=FALSE}
+# cache results
+knitr::opts_chunk$set(cache=TRUE, echo = TRUE, eval = TRUE, message=FALSE, warning = FALSE, fig.align='center')
+```
+
+```{r, message = FALSE, warning=FALSE}
+library(tidyverse)
+library(readxl)
+library(plotly)
+library(countrycode)
+library(modelr)
+library(broom)
+library(ggrepel)
+```
+
+Uno dei temi politici e sociologici più caldo e ricorrente degli ultimi tempi è stato ed è ancora sicuramente il fenomeno dell'immigrazione, non a caso questa tematica è stata anche oggetto di propaganda per alcuni partiti politici. Spesso l'aumento in volume di tale fenomeno è visto con timore e preoccupazione, non solo per il costo di integrazione ma anche perchè in molti ipotizzano che vi sia un qulche tipo di legame fra criminalità e immigrazione.
+Ma la domanda allora è: **esiste davvero un legame diretto fra queste due entità o è solo una percezione fuorviata dai mass media e dalla propaganda politica?**
+Lo scopo dell'analisi è rispondere a questo interrogativo andando ad analizzare congiuntamente database sulla criminalità sull'immigrazione. Per quanto riguarda la criminalità si è deciso di concentrarsi sui seguenti 3 tipi di crimine:
+
+* Omicidio
+* Aggressione
+* Violenza sessuale
+
+# Fonti di informazione
+
+* Per la criminalità:
+  + [World Bank](https://data.worldbank.org/indicator/VC.IHR.PSRC.P5)
+  + [UNODC](https://data.unodc.org/sys/rpt?reportfile=crime-statistics-robbery&REGION=__ALL&REGION__label=All&SUBREGION=__ALL&SUBREGION__label=All&COUNTRY=__ALL&COUNTRY__label=All+%28142%29&format=html&fullscreen=true&showtoc=true#state:0)
+* Per l'immigrazione:
+  + [Nazioni unite](http://www.un.org/en/development/desa/population/migration/data/estimates2/estimates17.shtml)
+
+# Importazione dei dati
+Nel seguito si procederà con l'importazione dei file ottenuti dai siti elencati in precedenza.
+
+## Importazione file su omicidi
+Procediamo quindi con l'importazione dei dati: Importiamo il dataset sugli omicidi ottenuto da WorldBank
+```{r}
+omicidiWB = read_csv("OmicidiWB.csv", na = "", skip = 4)
+omicidiWB
+# Il dataset non è in formato tidy in quanto abbiamo una colonna per ogni anno di osservzione,
+# la cosa da fare è quindi rendere il database nel formto adeguato
+unique(omicidiWB$X63)
+omicidiWBT = gather(omicidiWB, Year, Value, 5:62)
+glimpse(omicidiWBT)
+omicidiWBT = omicidiWBT[,-5]
+# i nomi di alcune colonne sono composti da due parole separate da uno spazio, per comodità sostituiamo lo spazio con il carattere "_"
+colnames(omicidiWBT) = gsub(" ", "_", colnames(omicidiWBT))
+# andiamo a vedere il risultato della correzione
+glimpse(omicidiWBT)
+
+#vediamo che le variabili Year e Value, che dovrebbero esere in formato numerico sono in formato character. procediamo quindi alla conversione
+omicidiWBT$Year = as.integer(omicidiWBT$Year)
+omicidiWBT$Value = as.numeric(omicidiWBT$Value)
+
+#risultato finale
+summary(omicidiWBT)
+head(omicidiWBT)
+```
+La struttura finale prevede un dataset di 15576 osservazioni e 6 variabili:
+
+1. Country_Name: il nome del paese
+2. Country_Code: il codice identificativo del paese
+3. Indicator_name: il nome dell'indicatore cosiderato, ovvero il numero di casi di omicidio     su 100000 persone
+4. Indicator_Code: codice identificativo dell'indicatore
+5. Year: Anno relativo all'osservazione
+6. Value: valore dell'indicatore
+
+Andiamo ad analizzare il contenuto delle variabili Indicator_Name e Indicator_code
+
+```{R}
+unique(omicidiWBT$Indicator_Name)
+unique(omicidiWBT$Indicator_Code)
+```
+Come possiamo notare abbiamo un solo valore per entrambe le variabili, dunque possiamo direttamente eliminare le due colonne e sostituire il nome della variabile "Value" con "Homicide_Rate_per100000"
+
+```{R}
+omicidiWBT = omicidiWBT[,c(-3,-4)]
+omicidiWBT <- rename(omicidiWBT, Homicide_Rate_per100000 = Value)
+summary(omicidiWBT)
+#Vincolo di chiave primaria
+omicidiWBT %>% count(Country_Name, Year) %>% filter(n >1)
+omicidiWBT %>% filter(is.na(Country_Name))
+# Vincolo rispettato
+```
+Possiamo considerare ultimata la pulizia di questo dataset. Procediamo con l'importazione dei successivi. 
+
+## Importazione file ottenuto da UNODC
+Importiamo e puliamo il dataset su vari tipi di crimine ottenuto dal sito di UNODC, costituito da diversi fogli excel corrispondenti a diversi tipi di crimine
+
+```{R}
+assault <- read_excel("CrimeUNODC.xlsx", sheet = 1, skip = 11)
+glimpse(assault)
+```
+Notiamo che la struttura tidy non è rispettata. Inoltre abbiamo informazioni ridondanti in quanto le colonne da 2003 a 2015 rappresentano il numero di casi totali osservati nei diversi paesi, mentre le successive rappresentano i tassi. Con i prossimi comandi elimineremo le colonne superflue, rinomineremo quelle rimanenti e porteremo il dataset nella struttura tidy.
+
+```{R}
+summary(assault$X__1)
+assault = assault[,-(4:17)]
+glimpse(assault)
+
+# riportiamo gli anni con la solita notazione eliminando i caratteri "__1" che compaiono alla fine.
+colnames(assault) = gsub("__1","",colnames(assault))
+
+# portiamo il dataset nella struttura tidy
+assault = gather(assault, Year, Assault_rate_per100000, 4:16)
+
+# convertiamo la colonna Year in formato intero
+assault$Year = as.integer(assault$Year)
+assault = rename(assault, Country_territory = `Country/territory`)
+glimpse(assault)
+
+# Verifica vincolo di chiave primaria
+assault %>% count(Country_territory, Year) %>% filter(n > 1)
+# Il vincolo di chiave primaria non è rispettato
+assault = assault %>% filter(!is.na(Country_territory))
+```
+Abbiamo così importato i dati da un foglio excel che descrive il crimine "assault". Riportiamo quindi di seguito le definizioni del suddetto crimine e degli altri tipi di crimine che verranno presi in considerazione:
+
+>1.  Definitions: "Assault" means physical attack against the body of another person    resulting in serious bodily injury, excluding indecent/sexual assault, threats and slapping/punching. 'Assault' leading to death should also be excluded. 
+2.  Definitions: Total "Sexual violence" means rape and sexual assault, including Sexual Offences against Children. 
+
+Procediamo quindi con l'importazione dei rimanenti fogli excel di interesse.
+
+```{R}
+sexViolence <- read_excel("CrimeUNODC.xlsx", sheet = 8, skip = 11)
+glimpse(sexViolence)
+sexViolence = sexViolence[,-(4:17)]
+colnames(sexViolence) = gsub("__1","",colnames(sexViolence))
+sexViolence = gather(sexViolence, Year, sexViolence_rate_per100000, 4:16)
+sexViolence$Year = as.integer(sexViolence$Year)
+sexViolence = rename(sexViolence, Country_territory = `Country/territory`)
+summary(sexViolence)
+# verifica vincolo chiave primaria
+sexViolence %>% count(Country_territory, Year) %>% filter(n >1)
+# eliminiamo i valori NA
+sexViolence = sexViolence %>% filter(!is.na(Country_territory))
+```
+Passiamo ora alla pulizia e alla formattazione dei dati sull'immigrazione.
+
+## Importazione dati su immigrazione
+
+```{R}
+immigrazione = read_excel("UN_MigrantStockTotal_2017.xlsx", sheet = 4, skip = 16, 
+                          na = "..", col_names = FALSE)
+head(immigrazione)
+```
+La situazione qui è più complicata: i nomi delle colonne nel foglio excel sono sfasati e di conseguenza si deve prcedere con un'assegnazione manuale dei nomi alle variabili guardando direttamente il foglio excel di interesse. Procediamo quindi con l'operazione:
+
+```{R}
+colnames(immigrazione) = c("Sort_order","Area_Region_Country", "Notes", "Code",
+                           "Type_of_data",
+                           "1990", "1995", "2000", "2005", "2010", "2015", "2017",
+                           "1990_m", "1995_m", "2000_m", "2005_m", "2010_m", "2015_m",
+                           "2017_m", "1990_f", "1995_f", "2000_f", "2005_f", "2010_f",
+                           "2015_f", "2017_f")
+glimpse(immigrazione)
+```
+Il dataset non è nella struttura tidy quindi è necessaria una riformattazione:
+
+```{R}
+# creiamo la colonna Year e la variabile rappresentante la percentuale di migranti sulla popolazione totale
+immigrazione = gather(immigrazione, Year, TotalPercentageOfMigrants, 6:12)
+glimpse(immigrazione)
+
+# restano comunque le colonne relative alle percentuali maschili e femminili per ogni anno di osservazione. Risolviamo il problema ancora con la funzione gather:
+
+immigrazione = gather(immigrazione, Year_m, MalePercentageOfMigrants, 6:12)
+glimpse(immigrazione)
+immigrazione = immigrazione[,-15] #rimuovo colonna Year_m
+
+immigrazione = gather(immigrazione, Year_f, FemalePercentageOfMigrants, 6:12)
+glimpse(immigrazione)
+immigrazione = immigrazione[,-9] #rimuovo colonna Year_f
+
+# vediamo la struttura
+summary(immigrazione)
+# convertiamo la colonna Year ad intero
+immigrazione$Year = as.integer(immigrazione$Year)
+```
+Ora la struttura di questo dataset è adeguata: 9 variabili di cui le ultime 3 rappresentano le percentuali di "international migrant stock" sulla popolazione totale in aggregato e divisa per genere. Dove con "International migrant stock" si intende: "the total number of [international migrants](https://migrationdataportal.org/themes/international-migrant-stocks) present in a given country at a particular point in time" (UN SD, 2017: 9, emphasis added). 
+Andiamo a vedere se è rispettato il vincolo di chiave primaria. Come attributi della chiave consideriamo "Year" e "Code"
+```{R}
+immigrazione %>% count(Year, Code)
+# ci sono molti valori ripetuti
+# consideriamo quindi i valori distinti
+immigrazione = immigrazione %>% distinct(Year, Code, .keep_all = TRUE)
+
+immigrazione %>% count(Year, Code) %>% filter(n > 1)
+#ora il vincolo di chiave primaria è rispettato e non ci sono più tuple ripetute.
+```
+
+Per rendere informativa la colonna Type_of_data importiamo il foglio excel che contengono i valori delle note
+
+```{R}
+note_immigrazione = read_excel("UN_MigrantStockTotal_2017.xlsx", sheet = 9, skip = 16, 
+                         col_names = FALSE)
+```
+
+Fatto questo, prima di procedere con le analisi importiamo un dataset contenente le coordinate dei paesi, informzione che ci sarà utile per dei plot successivamente. La fonte del dataset è la seguente:
+https://developers.google.com/public-data/docs/canonical/countries_csv
+
+
+```{R}
+country = read_delim("country.csv", delim = ";")
+head(country)
+# verifica vincolo di chiave primaria
+country %>% count(country, name) %>% filter(n > 1)
+# siccome il codice ISO rappresentato dalla variabile country sarà necessario per accedere alle coordinate rimuoviamo la tupla con codice ISO nullo
+country = country %>% filter(!is.na(country))
+```
+
+# ANALISI
+
+Dopo aver importato, pulito e formttato i dati iniziamo con l'analisi. Cerchiamo quindi di ottenere un grafico che riporti l'andamento nel mondo, o almeno nei paesi principali, del fenomeno dell'immigrazione, per poi confrontare l'andamento della criminalità negli stessi stati.
+
+## Analisi geografica immigrazione
+Iniziamo con un grafico semplice che mostri, per i diversi stati, l'andamento dell'immigrazione in funzione del tempo:
+
+
+```{R}
+ggplot(immigrazione, aes(Year, TotalPercentageOfMigrants, group = Area_Region_Country)) +
+  geom_line(alpha = 1/3) +
+  labs(x = "Anno", y = "Percentuale di migranti") +
+  theme_classic()
+# molto poco indicativo
+
+# cerchiamo di individuare solo i paesi soggetti ad immigrazione nel tempo
+a = immigrazione %>%
+  group_by(Area_Region_Country) %>%
+  mutate(media = mean(TotalPercentageOfMigrants, na.rm = T)) %>%
+  ungroup() %>%
+  filter(media > 5 & media <20) %>%
+  select(-media) %>% 
+  ggplot(aes(Year, TotalPercentageOfMigrants)) + 
+  geom_line(aes(col = Area_Region_Country), alpha = 0.4) +
+  labs(x = "Anno", y = "Percentuale di migranti") +
+  theme_classic()
+
+ggplotly(a, width = 800, height = 600)
+```
+Per trovare i paesi maggiormente soggetti ad immigrazione si è deciso di considerare quelli che presentano una percentuale media negli anni compresa tra 5% e 20%. Questo perchè considerando valori medi troppo elevati risulterebbero molti paesi caratterizzati da una popolazione piccola, paesi per i quali è facile infatti che la percentuale media di migranti sulla popolazione totale sia elevata. Imponendo invece il limite inferiore di 5%, si escludono quei paesi che non sono stati soggetti ad un forte fenomeno di immgrazione negli ultimi tempi. Notiamo che non c'è nessun trend particolare per il fenomeno, molti paesi presentano un trend diverso e non si riconosce nessun particolare pattern.
+Con il grafico seguente invece andiamo a visualizzare la collocazione geografica e l'andamento dell'immigrazione per i paesi più soggetti a questo fenomeno, ma prima andiamo ad aggiungere una colonna che contenga il codice ISO a due caratteri, utile per i plot successivi, al dataframe "immigrazione".
+
+```{R}
+# aggiungiamo la colonna ISO
+immigrazione = immigrazione %>% mutate(ISO = countrycode(Code, origin = "un",
+                                                  destination = "iso2c"))
+glimpse(immigrazione)
+```
+Procediamo quindi con i grafici successivi. Come già detto on il grafico seguente invece andiamo a visualizzare la collocazione geografica e l'andamento dell'immigrazione per i paesi più soggetti a questo fenomeno nel tempo .
+
+```{R}
+a<- immigrazione %>%
+  group_by(Area_Region_Country) %>%
+  mutate(media = mean(TotalPercentageOfMigrants, na.rm = T)) %>%
+  ungroup() %>%
+  filter(media > 5 & media <20) %>%
+  select(-media) %>%
+  filter(!is.na(ISO)) %>% # L'ISO serve per accedere alle coordinate
+  inner_join(country, by = c("ISO" = "country")) %>% 
+  ggplot(aes(longitude, latitude, label=name)) +
+  borders("world", alpha = 0.4) +
+  geom_point(aes(size = TotalPercentageOfMigrants, frame = Year),shape = 21, alpha = 0.8, fill = "red") +
+  coord_quickmap()+
+  theme_classic()+
+  labs(title="Immigrazione", x = "", y = "")
+ggplotly(a, width = 900, height = 600) %>% animation_opts(frame = 1000, transition = 0, redraw = F)
+```
+Per questi paesi si nota un generale trend rialzistico e una collocazione non eccessivamente concentrata, il che dimostra la globalità del fenomeno. si può tuttavia vedere un'alta densità dei punti nella zona Europea.
+Ora invece andiamo a vedere come si è sviluppata l'immigrazione nel mondo, andando a vedere quanti paesi e quali hanno superato una certa soglia di immigrazione nel tempo (si mantiene comunque una soglia superiore per cercare di non considerare i paesi con popolazione estremamente bassa).
+
+```{R}
+a = immigrazione %>% 
+  filter(TotalPercentageOfMigrants > 7 & TotalPercentageOfMigrants <25) %>%
+  filter(!is.na(ISO)) %>%
+  left_join(country, by = c("ISO" = "country"))%>%
+  ggplot(aes(longitude, latitude, label= name)) +
+  borders("world", alpha = .4) +
+  geom_point(aes(size = TotalPercentageOfMigrants, frame = Year), shape = 21, na.rm = T,      alpha =.8, fill = "red") +
+  coord_quickmap()+
+  theme_minimal()+
+  labs(title="Immigrazione", x = "", y = "", size ="TotalPercentageOfMigrants")
+ggplotly(a, width = 900, height = 600) %>% 
+  animation_opts(frame = 500, transition = 0, redraw = F)
+```
+Si notano diverse zone particolarmente interessate dal fenomeno, e ad esempio in Europa si nota una tendenza col tempo verso un incremento di aree dei cerchi, indicndo dunque una maggior concentrazione di movimenti migratori.
+
+## Analisi geografica omicidi
+Andiamo ora ad analizzare il dataset sugli omicidi preso da World Bank. Prima di tutto aggiungiamo una colonna contenente il codice identificativo ISO a due cifre tramite la funzione countrycode. 
+
+```{R}
+omicidiWBT =omicidiWBT %>% mutate(ISO = countrycode(Country_Code, origin = "iso3c", destination = "iso2c"))
+glimpse(omicidiWBT)
+
+
+```
+
+Per questo dataset la serie storica inzia dal 1960 ma abbiamo molti valori NA per i primi decenni. Andiamo comunque a dare una visualizzazione grafica per gli stati con un tasso di omicidio più elevato nel tempo
+
+```{R}
+
+# Usando dimensione dei punti
+a = omicidiWBT %>%
+  filter(Homicide_Rate_per100000 > 4) %>%
+  filter(!is.na(ISO)) %>%
+  inner_join(country, by = c("ISO" = "country")) %>%
+  ggplot(aes(longitude, latitude, label= name, frame = Year)) +
+  borders("world", alpha = .4) +
+  geom_point(aes(size = Homicide_Rate_per100000), fill = "red",shape = 21, na.rm = T, alpha =.7) +
+  coord_quickmap() +
+  theme_minimal() +
+  labs(title="Tasso di omicidio")
+ggplotly(a, width = 900, height = 600) %>% 
+  animation_opts(frame = 500, transition = 0, redraw = F)
+```
+Vediamo che c'è un'alta concentrazione del fenomeno in diverse zone del globo, tra tutte spicca il centro-america, e a seguire abbiamo il sud-est asiatico e l'Africa (i cui dati compaiono da un certo istante in poi). Non mancano stati industrializzati e infatti vediamo che fra i punti compaiono gli Stati Uniti e alcuni stati della zona Europea.
+
+Proviamo ora ad andare a graficare nella mappa mondiale i paesi con un alto tasso di omicidio e i paesi con un alto grado di immigrazione:
+
+```{R}
+ b = immigrazione %>%
+  filter(TotalPercentageOfMigrants > 7 & TotalPercentageOfMigrants <27, !is.na(ISO)) %>%
+  inner_join(omicidiWBT %>%
+               filter(Homicide_Rate_per100000 > 7, !is.na(ISO)), 
+             by = c("ISO", "Year")) %>% inner_join(country, by = c("ISO" = "country")) 
+
+a = ggplot(b, aes(frame = Year)) +
+  geom_point(aes(longitude, latitude),col = "red", alpha = .6) +
+  borders("world", alpha = .4) +
+  coord_quickmap() +
+  theme_minimal() +
+  labs(title="confronto omicidi e immigrazione", x = "", y = "", size ="")
+
+ggplotly(a, width = 900, height = 600) %>%
+  animation_opts(frame = 500, transition = 0, redraw = F)
+
+```
+Come possiamo notare non c'è una stretta corrispondenza tra immigrazione e tasso di omicidi in quanto solo pochi punti vengono rappresentati nel grafico, e quei punti rappresentano i paesi con alta percentuale di migranti e alto tasso di omicidio. Si nota una certa correlazione nella zona dell'america centrale e nelle isole della zona. Questa correlazione potrebbe essere dovuta a movimenti migratori verso stati più industrializzati per i quali i migranti sono costretti a fermarsi in stati caratterizzati da un elevata criminalità.
+
+## Analisi geografica crimine "aggressione" 
+Procediamo ora ad un'analisi dello stesso tipo per gli altri tipi di cirmine, cominciando dal crimine classificato come "Assault", ovvero un attacco fisico verso un terzo che provoca ferite gravi, ad esclusione della morte e della violenza sessuale.
+Prima di tutto andiamo ad aggiungere al dataframe "assault" una colonna che contenga il codice ISO  a due cifre per ottenere poi le coordinate dei paesi tramite un join con il dataframe "country"
+
+```{R}
+assault = mutate(assault, ISO = countrycode(Country_territory, origin = "country.name", destination = "iso2c"))
+# vediamo se ad ogni valore di Country_territory è stato assegnato uno ed un solo ISO
+assault %>% count(ISO)
+assault %>% count(ISO) %>% filter(n >13)
+assault %>% filter(ISO == "GB")
+```
+Vediamo che il codice ISO "GB" si ripete per i diversi stati che compongono il Regno Unito, questo perchè viene assegnato lo stesso codice ISO a ciascuno stato che compone il Regno Unito. Tuttavia noi abbiamo bisogno che ci sia corrispondenza biunivoca tra nome dello stato e codice ISO, in modo da poter assegnare ad ogni stato una ed una sola coppia di coordinate geografiche. Per sistemare questo errore dobbiamo sostituire le 3 righe di ciascun anno con un unica riga che abbia come valore di "Assault_rate_per100000" la somma dei 3 valori delle righe da sostituire, essendo il tasso di aggressione del Regno Unito la somma dei tassi degli stati che lo formano.
+```{R}
+# salviamo in una variabile di comdo un tibble che abbia come valore di  Assault_rate_per100000 di ciascun anno la somma dei 3 valori da rimuovere 
+b1 =assault %>% group_by(Year, ISO) %>% filter(ISO == "GB") %>%  summarise(Assault_rate_per100000 = sum(Assault_rate_per100000))
+# depuriamo il dataset originale dalle tuple con ISO pari a "GB" 
+assault = assault %>% filter(ISO != "GB") 
+# aggiungiamo alla variabile di comodo le colonne mancanti per poter unire le sue righe al dataset principale (assault)
+b1 = b1 %>% mutate(Region = as.character(NA), `Sub-region` =as.character(NA), Country_territory = "United Kingdom")
+# aggiungiamo le righe per ripristinare correttamente le tuple con ISO = "GB" precedentemente rimosse
+assault = bind_rows(assault,b1)
+assault %>% count(ISO) %>% filter(n >13)
+```
+
+Ora, con la solita metodologia, andiamo a vedere l'evoluzione di questo crimine nel mondo negli stati più soggetti a tale crimine. Andiamo quindi a graficare i paesi con un tasso di aggressione maggiore di una certa soglia nei rispettivi anni, in modo da identificare in quali paesi la situazione è più aggravata.
+
+```{R}
+a = assault %>% filter(Assault_rate_per100000 > 65) %>% # 65 poco sopra la mediana
+  inner_join(country, by = c("ISO" = "country")) %>%
+  ggplot(aes(longitude, latitude, label= name)) +
+  borders("world", alpha = .4) +
+  geom_point(aes(size = Assault_rate_per100000, frame = Year), fill = "red",shape = 21, na.rm = T,   alpha =.8) +
+  coord_quickmap() +
+  theme_minimal() +
+  labs(title="Tasso di aggressione")
+
+ggplotly(a, width = 900, height = 600)%>%animation_opts(transition = 0, redraw = F)
+```
+Anche in questo caso possiamo dire che il fenomeno è diffuso in molte regioni del globo con una maggior concentrazione in Amerca centrale, tuttavia si nota un calo negi ultimi anni. Bisogna però prestare attenzione perchè il calo osservato potrebbe esere dovuto ad un aumento di osservazioni NA.
+Detto questo, andiamo a vedere a livello grafico, come abbiamo fatto per il tasso di omicidi, se c'è una correlazione tra tasso di immigrazione e tasso di aggressione andando ad inserire nella mappa globale i punti corrispondenti agli stati che presentano contemporaneamente un alto tasso di aggressione ed un'alta percentuale di migranti.
+
+```{R}
+b = immigrazione %>%
+  filter(TotalPercentageOfMigrants > 7 & TotalPercentageOfMigrants <30, !is.na(ISO)) %>%
+  inner_join(assault %>%
+               filter(Assault_rate_per100000 > 65, !is.na(ISO)), 
+             by = c("ISO", "Year")) %>% inner_join(country, by = c("ISO" = "country")) 
+
+a = ggplot(b, aes(frame = Year, label = Area_Region_Country)) +
+  geom_point(aes(longitude, latitude),col = "red", alpha = .6) +
+  borders("world", alpha = .4) +
+  coord_quickmap() +
+  theme_minimal() +
+  labs(title="confronto aggressione e immigrazione", x = "", y = "", size ="")
+
+ggplotly(a, width = 900, height = 600) %>%
+  animation_opts(frame = 500, transition = 0, redraw = F)
+```
+Rispetto al crimine di omicidio, qui vediamo che c'è una correlazione grafica maggiore in quanto sono presenti diversi punti, in particolare in Europa.
+
+## Analisi geografica crimine "violenza sessuale" 
+
+Andiamo ora ad analizzare l'ultimo tipo di crimine: la violenza sessuale. Per il momento useremo la stessa metodologia utilizzata fino ad ora.
+
+```{R}
+# inseriamo la colonna ISO
+sexViolence = mutate(sexViolence, ISO = countrycode(Country_territory, origin = "country.name", destination = "iso2c"))
+```
+Per la stessa ragione di prima andremo a verificare se persiste il medesimo problema riscontrato per L'ISO del Regno Unito nei dataset **assault** e **robbery**.
+
+```{R}
+# ci dovrebbe essere un solo codice ISO in corrispondenza ad ogni anno
+sexViolence %>% count(Year, ISO) %>% filter(n>1)
+```
+Il problema è presente anche in questo dataset, andiamo dunque ad applicare la soluzione:
+
+```{R}
+b1 =sexViolence %>% group_by(Year, ISO) %>% filter(ISO == "GB") %>% summarise(sexViolence_rate_per100000 = sum(sexViolence_rate_per100000))
+
+sexViolence = sexViolence %>% filter(ISO != "GB") 
+
+b1 = b1 %>% mutate(Region = as.character(NA), `Sub-region` =as.character(NA), Country_territory = "United Kingdom")
+
+sexViolence = bind_rows(sexViolence,b1)
+
+sexViolence %>% count(Year, ISO) %>% filter(n >1)
+```
+Come fatto in precedenza andiamo a visualizzare gli stati che presebtano una maggior concentrazione di questo crimine.
+```{R}
+# violenze sessuali nel mondo mappando size
+a = sexViolence %>% filter(sexViolence_rate_per100000 > 18) %>% # 18 è poco superiore alla mediana
+  inner_join(country, by = c("ISO" = "country")) %>%
+  ggplot(aes(longitude, latitude, label= name)) +
+  borders("world", alpha = .4) +
+  geom_point(aes(size = sexViolence_rate_per100000, frame = Year), fill = "red",shape = 21,
+             na.rm = T, alpha = 0.8) +
+  coord_quickmap() +
+  theme_minimal() +
+  labs(title="Tasso di violenze sessuali", x = "", y = "", size ="Tasso di violenze sessuali")
+
+ggplotly(a, width = 900, height = 600) %>% animation_opts(transition = 0, redraw = F)
+
+```
+A causa della mancanza di molti dati è difficile trarre qualche conclusione. Il numero di punti aumenta nel tempo ma in molti casi perchè per i primi anni non si era a conoscienza del valore dell'indice (NA nel dataframe). Guardando all'Europa la situazione non sembra chiara, all'inizio sembra che il fenomeno aumenti con una relativa diminuzione verso gli ultimi anni.
+Come per gli altri tipi di crimine andiamo a graficare nellamappa i paesi con più immigrazione e con più episodi di violenza sessuale.
+
+```{R}
+# immigrazione eviolenze sessuali insieme
+b = immigrazione %>%
+  filter(TotalPercentageOfMigrants > 7 & TotalPercentageOfMigrants <27, !is.na(ISO)) %>%
+  inner_join(sexViolence %>%
+               filter(sexViolence_rate_per100000 > 18, !is.na(ISO)), 
+             by = c("ISO", "Year")) %>% inner_join(country, by = c("ISO" = "country")) 
+
+a = ggplot(b, aes(frame = Year, label = Area_Region_Country)) +
+  geom_point(aes(longitude, latitude),col = "red", alpha = .6) +
+  borders("world", alpha = .4) +
+  coord_quickmap() +
+  theme_minimal() +
+  labs(title="confronto violenza sessuale e immigrazione", x = "", y = "", size ="")
+
+ggplotly(a, width = 900, height = 600) %>%
+  animation_opts(frame = 500, transition = 0, redraw = F)
+```
+
+Anche in questo caso solamente pochi stati risultano avere contemporaneamente un alto tasso di violenza sessuale e un'alta percentuale di immigrazione, si nota peraltro una concentrazione di punti non irrilevante in Europa.
+
+# REGRESSIONE
+
+Quello che abbiamo fatto in precedenza è stata una semplice analisi grafica, con lo scopo di vedere quali stati erano maggiormente interessati dai fenomeni in esame. Con la parte seguente andremo a formalizzare l'assenza o la presena di relazione fra le quantità di interesse tramite un modello di regressione lineare, andando a verificare se effettivamente l'immigrazione spiega un aumento, o una diminuzione, della concentrazione dei crimini.
+Proviamo ora a fare quindi un'analisi più approfondita. Per fare questo eseguiamo un join fra il dataframe immigrazione e quelli riguardanti la criminalità consiederando solo gli stati in comune ad entrambi i dataframe (i valori NA verranno omessi). 
+
+## Regressione tra immigrazione e tasso di omicidi
+La regressione verrà sviluppata considerando come osservazioni la media del tasso di omicidi per ogni stato (media delle osservazioni annue), e la media della percentuale di migranti, in modo da avere per ogni stato una ed una sola osservazione. Procedendo in questo modo perdiamo molti punti, ma molti di questi sarebbero stati correlati fra loro (le osservazioni dello stesso stato sono simili) e avrebbero potuto portare ad una distorsione nell'elaborazione dei risultati.
+```{R}
+# salviamo il dataframe su cui verranno effettuate le analisi
+b = immigrazione %>% select(ISO, Year, TotalPercentageOfMigrants) %>%
+  filter(!is.na(ISO)) %>%
+  inner_join(omicidiWBT %>% filter(!is.na(ISO)), by = c("ISO", "Year")) %>%
+  group_by(ISO) %>% summarise(mMigrants = mean(TotalPercentageOfMigrants, na.rim = T), 
+                              mHomicide = mean(Homicide_Rate_per100000, na.rm = T)) %>%
+  mutate(Country = countrycode(ISO, origin = "iso2c", destination = "country.name"),
+         Continent = countrycode(ISO, origin = "iso2c", destination = "continent"))  
+
+ a = b %>%  ggplot(aes(mMigrants, mHomicide)) +
+  geom_point(aes(col = Continent, label = Country), alpha = .7, position = "jitter") +
+  labs(x = "Tasso medio di migranti", y = "Tasso medio di omicidio") +
+  theme_minimal()
+
+ggplotly(a, width = 900, height = 600)
+```
+Questo grafico non risulta molto indicativo, c'è una massa di punti concentrata vicino all'origine e si possono notare molti valori estremi. Colorando i punti per continente si vede che si possono individuare dei gruppi all'interno dell'insieme di osservazioni. Proviamo con il seguente grafico a concentrare la visione sulla massa di punti vicino all'origine.
+```{R}
+# limitando gli assi per una visione più chiara
+a = a +
+  xlim(0,50)+
+  ylim(0,40) 
+
+ggplotly(a, width = 900, height = 600)
+```
+Ora la situazione è più chiara, in ogni caso non è possibile notare una relazione netta fra le due grandezze. Vediamo che i paesi europei si concentrano molto vicino all'asse x, questo indica che in media negli ultimi anni sono stati caratterizzati da un'alta immigrazione ma da un basso tasso di omicidi. Vediamo invece che diversi paesi americani si avvicinano all'asse y, questo indica che tali paesi sono stati caratterizzati, in media nel corso degli ultimi anni, da  relativamente poca immigrazione ma da un elevato tasso di omicidi. 
+Proviamo ora a rimuovere i valori anomali o outliers.
+
+```{R}
+# cercando di individuare i valori anomali per poi rimuoverli:
+# creiamo una funzione che ci restituisca gli estremi di una distribuzione che identificano gli outliers
+getOutliersBoundaries <- function(x){
+  a = quantile(x, probs = 0.25, names = FALSE, na.rm = T) - 1.5*IQR(x, na.rm = T)
+  b= quantile(x, probs = 0.75, names = FALSE, na.rm = T) + 1.5*IQR(x, na.rm = T)
+  return(c(a,b))
+}
+
+#usiamo la funzione appena creata per filtrare i dati
+
+b1 = b %>%
+  filter(mMigrants > getOutliersBoundaries(mMigrants)[1] & mMigrants < getOutliersBoundaries(mMigrants)[2],
+         mHomicide > getOutliersBoundaries(mHomicide)[1] & mHomicide < getOutliersBoundaries(mHomicide)[2]) 
+
+a = b1 %>%  ggplot(aes(mMigrants, mHomicide)) +
+  geom_point(aes(col = Continent, label = Country), alpha = .7, position = "jitter") +
+  labs(x = "Tasso medio di migranti", y = "Tasso medio di omicidio") +
+  theme_minimal()
+
+ggplotly(a, width = 900, height = 600)
+```
+Dopo aver eliminato i valori anomali abbiamo un'immagine più chiara della situazione e vediamo una nuvola di punti che non sembra dare luogo ad una particolare relazione. Andiamo quindi a graficare un modello di regressione e a commentarne i parametri
+
+```{R}
+# 1) Unica retta considerando anche gli outliers
+a = b %>%
+  ggplot(aes(mMigrants, mHomicide)) +
+  geom_point(aes(col = Continent, label = Country), alpha = .5, position = "jitter") +
+  labs(x = "Tasso medio di migranti", y = "Tasso medio di omicidio") +
+  theme_minimal() 
+  
+
+a + geom_smooth(method = "lm")
+
+# 2) una retta per continente considerando ancora gli outliers
+a + geom_smooth(aes(col = Continent),method = "lm", se = F)
+
+# 3) Unica retta rimuovendo outliers
+a = b1 %>%
+  ggplot(aes(mMigrants, mHomicide)) +
+  geom_point(aes(col = Continent, label = Country), alpha = .7, position = "jitter") +
+  labs(x = "Tasso medio di migranti", y = "Tasso medio di omicidio") +
+  theme_minimal()
+
+a + geom_smooth(method = "lm")
+
+# 4) UNa retta per continente senza outliers
+a + geom_smooth(aes(col = Continent),method = "lm", se = F)
+
+```
+Concentrandoci sui grafici che escludono gli ouliers vediamo che nel primo abbiamo una retta con pendenza negativa, ciò indicherebbe una correlazione tendenzialmente negativa fra tasso di omicidi e tasso di immigrazione. 
+Guardando invece le rette differenziate per continente vediamo che l'Europa e l'Asia sono caratterizzate da rette praticamente orizzontali con una leggera tendenza positiva, le rette rappresentanti l'Oceania e l'America hanno una pendenza negativa, mentre l'unico contiente caratterizzato da una pendenza nettamente positiva è l'Africa. 
+Andiamo ora ad analizzare alcuni parmetri del modello di regressione, prima considerando gli outliers e poi senza outliers
+
+```{R}
+# Consiedrando gli outliers
+mod1 = lm(mHomicide ~ mMigrants, data = b)
+summary(mod1)
+
+# Non considerando gli otliers
+
+mod2 = lm(mHomicide ~ mMigrants, data = b1)
+
+summary(mod2)
+```
+Considerando gli outliers vediamo che il p-value per il test di nullità dei coefficienti è piuttosto basso, ciò indica che ci dovvrebbe essere relazione fra le due grandezze, e a giudicare dal segno del coeffiente relativo alla pendenza della retta di regressione, ci dovrebbe essere una relazione inversa. Peraltro vediamo che l'indice R^2 è molto basso, circa 3%, ciò indica che il modello non si adatta bene ai dati, infatti grazie a questo valore possiamo dire che appena il 3% della variabilità totale è spiegata dal modello. Eliminando invece gli outliers dalle osservzioni il coefficiente riguardante la pendenza della retta perde significatività e ha un valore leggermente negativo, indicando quindi una correlazione negativa fra immigrazione e tasso di omicidio. Anche qui tuttavia l'indice R^2 è basso, circa 1,7%, di conseguenza risulta difficile ammettere che valga una relazione lineare fra le due grandezze.
+Andiamo ora ad analizzare brevemente i residui dei due modelli.
+```{R}
+# grafico residui modello con outlier compresi
+b %>% 
+   add_residuals(mod1) %>%
+   ggplot(aes(mMigrants, resid)) +
+   geom_point(aes(col = Continent), alpha = 0.3, position = "jitter") +
+   geom_line(y = 0, col = "red") +
+   theme_classic() +
+   labs(title = "residui con outliers inclusi",x = "Tasso medio di migranti", y = "residui")
+
+# Istogramma residui modello con outliers compresi
+b %>%
+   add_residuals(mod1) %>%
+   ggplot(aes(resid)) +
+   geom_histogram(binwidth = 3) +
+   labs(title = "outliers inclusi", x = "Residui", y = "n") +
+   theme_classic()
+
+# grafico dei resiudi modello outliers esclusi
+b1 %>% 
+  add_residuals(mod2) %>%
+  ggplot(aes(mMigrants, resid)) +
+  geom_point(aes(col = Continent), alpha = 0.6) +
+  geom_line(y = 0, col = "red") +
+  theme_classic() +
+  labs(title = "outliers esclusi", x = "Tasso medio di migranti", y = "residui", col = "Continente")
+
+# Istogramma dei residui modello con outliers esclusi
+b1 %>%
+  add_residuals(mod2) %>%
+  ggplot(aes(resid)) +
+  geom_histogram(binwidth = 2) +
+  labs(title = "outliers esclusi",x = "Residui", y = "n") +
+  theme_classic()
+```
+Si nota che i residui sembrano confermare che non vi sia una relazione lneare fra le due grandezze. Dal primo istogramma si vede che la distribuzione non è normale ma presenta una lunga coda a destra, e ciò è confermato anche dallo scatter plot in cui si vede che la maggioranza dei punti giace al di sotto della retta di regressione stimata. Andando a rimuovere gli outliers la situazione migliora nello scatter plot, tuttavia dall'istogramma si può notare che la distrubuzione dei residui resta asimmetrica presentando un'assimetria positiva.
+Prima di proseguire proviamo ad utilizzare una regressione robusta per evitare di rimuovere gli ouliers senza però ottenere dei risultati distorti da questi ulitimi.
+
+```{R}
+# definiamo il modello di regressione robusta
+mod3 = MASS::rlm(mHomicide ~ mMigrants, data = b)
+summary(mod3)
+# confronto con il modello con gli outliers compresi
+summary(mod1)
+# confronto grafico
+b %>% 
+  ggplot(aes(mMigrants, mHomicide)) +
+  geom_point(alpha = 0.4) +
+  geom_abline(aes(intercept = mod1$coefficients[[1]], slope = mod1$coefficients[[2]],
+                  col = "ols")) +
+  geom_abline(aes(intercept = mod3$coefficients[[1]], slope = mod3$coefficients[[2]],
+                  col = "robust")) +
+  labs(x = "Tasso medio di migranti", y = "tasso medio di omicidi") +
+  scale_color_manual("Line colour", values = c("ols" = "red", "robust" = "blue")) +
+  theme_classic()
+```
+Vediamo che tutto sommato i due modelli non si discostano molto nonostante ci sia una forte presenza di valori estremi. Si nota che nel modello robusto la pendenza della retta di regressione diminuisce leggermente accentuando il fatto che fra le due grandezze non ci sia una relazione lineare positiva.
+Per questo modello non si esegue la solita analisi dei residui e non si commenta l'indice $R^{2}$ in quanto è costruito in maniera diversa dalla regressione semplice e non valgono le stesse proprietà. 
+Siccome rimuovere gli outliers indiscrminatamente può rivelarsi una pratica pericolosa e non sempre corretta, siccome si sono notate rette di regressione diverse se differenziate per continente, e siccome nello scatter plot *tasso medio di migranti vs tasso medio di omicidi* si è notata una distribuzione dei punti con forma iperbolica proviamo nel seguito a trasformare i dati per verificare se effettivamente c'è una relazione iperbolica fra le due grandezze.
+
+```{R}
+# grafico con ordinata trasformata (ordinata = tasso medio di omicidi)
+a = b %>% 
+  ggplot(aes(mMigrants, 1/mHomicide, col = Continent)) +
+  geom_point(alpha = 0.5) +
+  geom_smooth(aes(col = Continent), method = "lm", se = F) +
+  labs(x = "tasso medio di migranti", y = "Reciproco tasso medio di immigrazione") +
+  theme_light()
+ggplotly(a, width = 900, height = 600)
+
+# è necessario rimuovere i valori Nan e uguali a zero (con mHomicide > 0 si perdono 3 osservazioni) per sviluppare la regressione
+c = b %>% filter(!is.nan(mHomicide), mHomicide > 0)
+
+mod4 = lm(1/mHomicide ~ mMigrants + Continent, data = c)
+summary(mod4)
+```
+Vediamo che trasformando il tasso medio di omicidi nel suo reciproco la disposizione dei punti migliora, la relazione sembra puù lineare e questo indicherebbe una relazione iperbolica fra le grandezze originali. Si nota inoltre che tutti i coefficienti sono significativi tranne quello relativo al continente Oceania, ma soprattutto si vede che l'indice $R^{2}$ è cresciuto notevolmente rispetto ai modelli precedenti. 
+Andiamo allora ad analizzare brevemente i residui:
+```{R}
+# scatter plot residui vs tasso medio di migranti
+a = c %>% 
+  add_residuals(mod4) %>%
+  ggplot(aes(mMigrants, resid)) +
+  geom_point(aes(col = Continent, label = Country), alpha = 0.5, position = "jitter") +
+  geom_line(y = 0, col = "red") +
+  theme_classic() +
+  labs(x = "Tasso medio di migranti", y = "residui")
+ggplotly(a, width = 900, height = 600)
+
+# Istogramma dei residui
+c %>%
+  add_residuals(mod4) %>%
+  ggplot(aes(resid)) +
+  geom_histogram(aes(y =..density..), fill = "coral") +
+  labs(x = "Residui", y = "density") +
+  stat_function(fun=dnorm, color="red",
+                args=list(mean=mean(mod4$residuals, na.rm = T), 
+                          sd=sd(mod4$residuals, na.rm = T)))+
+  theme_light() 
+
+```
+Si nota un vistoso miglioramento sia dallo scatter plot che dall'istogramma dei residui: la forma della distrubuzione è molto più simile ad una normale rispetto ai modelli precedenti, la variabilità è diminuita notevolmente, tuttavia rispetto ad una normle abbiamo una concentrazione molto più elevata in prossimità del valore zero.
+In conclusione possiamo dire che trasformando il tasso medio di omicidi nel suo reciproco e considerndo ne modello anche la variabile "Continente" otteniamo una relazione approssimativamente linere, in quanto la variabilità spiegata dal modello è circa pari al 34%, quindi un valore considerevole anche se tutto sommato non molto alto. Il fatto che la relazione sia abbastanza approssimativa si vede anche dal grafico dei resdui che di fatto non presenta le caratteristiche tipiche di un buon modello di regressione. 
+Andiamo quindi a graficare il modello finale:
+```{r}
+a = c %>% 
+  add_predictions(mod4) %>%
+  ggplot() +
+  geom_point(aes(mMigrants, mHomicide, col = Continent), alpha = 0.5) +
+  geom_line(aes(mMigrants, 1/pred, col = Continent)) +
+  ylim(0,84) +
+  labs(x = "tasso medio di migranti", y = "Reciproco tasso medio di immigrazione") +
+  scale_colour_brewer(palette = "Set1") +
+  theme_light()
+ggplotly(a)
+```
+Fatto quetso andiamo ad analizzare la relazione fra l'immigrazione e gli altri tipi di crimine a partire con l'aggressione.
+
+## Regressione tra immigrazione e tasso di aggressione
+
+Come prima andremo a fare un join tra i due dataframe di interesse per estrarre le informazioni che possono essere messe in comune.
+
+```{R}
+b = immigrazione  %>%
+  filter(!is.na(ISO)) %>%
+  inner_join(assault, by = c("ISO", "Year")) %>%
+  select(Area_Region_Country, Year, TotalPercentageOfMigrants, Assault_rate_per100000)
+
+```
+Come in precedenza analizzeremo l'eventuale relazione fra i tassi medi nel tempo per evitare di andare in contro a problemi di autocorrelzione fra i dati. 
+Calcoliamo dunque i tassi medi:
+
+```{r}
+b = b %>% group_by(Area_Region_Country) %>% 
+  summarise(mMigrants = mean(TotalPercentageOfMigrants, na.rm = T),
+            mAssault = mean(Assault_rate_per100000, na.rm = T)) %>%
+   mutate(Continent = countrycode(Area_Region_Country, origin = "country.name", destination = "continent"))
+
+```
+
+Prima di tutto andiamo ad eseguire un plot di tutti i punti per vedere se visivamente c'è una relazione.
+
+```{R}
+a = ggplot(b, aes(x = mMigrants, y = mAssault, col = Continent)) +
+  geom_point(aes(label = Area_Region_Country), position = "jitter", alpha = .6, na.rm = T) +
+  labs(x = "Percentuale media di migranti", y = "Tasso medio di aggressione") +
+  geom_smooth(method = "lm", se = F, size = 0.5) +
+  scale_colour_brewer(palette = "Set1") +
+  theme_light() 
+
+ggplotly(a, width = 900, height = 600)
+```
+Dal grafico si può vedere che le rette di regressione differenziate per continente sono fra loro diverse, questo ci suggerisce che la variabile *Continent* sarà significativa nel modello di regressione lienare. In ogni caso non sembra evidete nessuna chiara relazione lineare fra il tasso medio di migranti e il tasso medio di aggressione.
+Nel seguito andremo a commentare i modelli di regressione.
+```{r}
+# modello di regressione lineare senza variabile Continent
+mod1 = lm(mAssault ~ mMigrants, data = b)
+summary(mod1)
+
+# modello con variabile "Continent" compresa 
+mod2 = lm(mAssault ~ mMigrants + Continent, data = b)
+summary(mod2)
+# modello con interazione
+mod3 = lm(mAssault ~ mMigrants*Continent, data = b)
+summary(mod3)
+# test di significatività del modello
+anova(mod2,mod3)
+```
+Dopo aver analizzato i parametri del modello di regressione possiamo dire che il modello migliore è quello che tiene conto della variabile *Continent* e dell'interazione che essa presenta con la percentuale media di migranti. 
+Il modello ci dice che c'è una relazione significativa tra tasso medio di aggressione e tasso medio di migranti, tuttavia, a giudicare dal valore dell'indice $R^{2}$ aggiustato pari appena a 10%, possiamo concludere che questo non si adatta bene ai dati, spiegando una bassa percentuale di variabilità.
+Con il grafico seguente andiamo a valutare visivamente l'inadeguatezza del modello andando a fare un grafico del tipo *observed vs predicted*
+```{r}
+a = b %>% add_predictions(mod3) %>%
+  ggplot(aes(x = mAssault, y = pred)) +
+  geom_point(aes(col = Continent), alpha = 0.5) +
+  labs(x = "osservati", "previsti") +
+  geom_abline(intercept = 0, slope = 1, col = "red") +
+  scale_colour_brewer(palette = "Set1") +
+  theme_light()
+  ggplotly(a, width = 900, height = 600)
+```
+Si vede che se il modello fosse stato corretto allora i punti si sarebbero disposti lungo la bisettrice del primo e terzo quadrante, qui la situazione non è per nulla simile a quella ideale. Questo conferma l'assenza di relazione lineare fra le quantità.
+
+Proviamo anche questa volta a trasformare il tasso medio di aggressione nel suo inverso per vedere se si presentano miglioramenti.
+```{r}
+# osservazioni che perderemo nella trasformazione
+b %>% filter(mAssault == 0)
+# scatter plot dopo la trasformazione
+a = b %>% 
+  ggplot(aes(mMigrants, 1/mAssault, col = Continent)) +
+  geom_point(aes(label = Area_Region_Country), alpha = 0.5) +
+  geom_smooth(aes(col = Continent), method = "lm", se = F, size = 0.5) +
+  labs(x = "tasso medio di migranti", y = "Reciproco tasso medio di immigrazione") +
+  scale_colour_brewer(palette = "Set1") +
+  theme_light()
+ggplotly(a)
+```
+Si nota che il grafico non risulta leggibile a causa di due valori anomali: l'Egitto e il Bangladesh. Questi due stati presentano un tasso medio di aggressione insolitamente basso vista la dimensione della popolazione dei paesi. A mio avviso sarebbe meglio rimuovere le osservzioni dal dataset visto il comportamento anomalo.
+```{r}
+# elimino valori anomali
+b = b %>% filter(Area_Region_Country != "Egypt",
+                 Area_Region_Country != "Bangladesh")
+# relazione lineare (?) per i diversi diversi continenti
+a = b %>% 
+  ggplot(aes(mMigrants, 1/mAssault, col = Continent, frame = Continent)) +
+  geom_point(aes(label = Area_Region_Country), alpha = 0.5) +
+  geom_smooth(aes(col = Continent), method = "lm", se = F, size = 0.5) +
+  labs(x = "tasso medio di migranti", y = "Reciproco tasso medio di immigrazione") +
+  scale_colour_brewer(palette = "Set1") +
+  theme_light()
+ggplotly(a, width = 900, height = 600) %>% animation_opts(frame = 1000, transition = 0, redraw = F)
+```
+Per alcuni continenti la relazione sembra essere approssimativamente lineare, andiamo dunque a costruire un modello di regressione.
+```{r}
+
+# rimuovere valori nulli e Nan per costruire modello
+c = b %>% filter(!is.nan(mAssault), mAssault > 0)
+# regressione ordinata trasformata con variabile "Continent" inclusa
+mod4 = lm(1/mAssault ~ mMigrants + Continent, data = c)
+summary(mod4)
+# regressione ordinata trasformata con interazione
+mod5 = lm(1/mAssault ~ mMigrants * Continent, data = c)
+summary(mod5)
+# test significatività di un modello
+anova(mod4, mod5)
+
+mod6 = lm(1/mAssault ~ mMigrants, data = c)
+summary(mod6)
+```
+I parametri ci dicono che non c'è relazione lineare fra il reciproco del tasso medio di aggressione e la percentuale media di migranti. Questo indica che la relazione tra tasso medio di aggressione e percentuale media di migranti non è nemmeno iperbolica.
+Dopo aver effettuato le seguenti analisi possiamo concludere che fra percentuale media di migranti e tasso medio di agressione non c'è relazione né iperbolica, né lineare.Inoltre la distribuzione dei punti non lascia intuire altre possibili relazioni.
+Andiamo quindi ad analizzare l'eventuale relazione fra migrazione e il crimine di violenza sessuale.
+
+## Regressione fra percentuale media di migranti e tasso di violenza sessuale
+```{r}
+# join fra i dataframe di interesse
+b = immigrazione  %>%
+  filter(!is.na(ISO)) %>%
+  inner_join(sexViolence, by = c("ISO", "Year")) %>%
+  select(Area_Region_Country, Year, TotalPercentageOfMigrants, sexViolence_rate_per100000)
+```
+Useremo la stessa metodologia usata nei casi precedenti per evitare risultati distorti dall'autocorrelazione, ovvero andremo a computare la media delle grandezze d'interesse (in questo caso il numero di casi violenza sessuale su 100000 persone e la percentuale media di migranti) rispetto agli anni, in modo che ogni stato abbia una sola osservazione.
+```{r}
+b = b %>% group_by(Area_Region_Country) %>% 
+summarise(mMigrants = mean(TotalPercentageOfMigrants, na.rm = T),
+mSexViol = mean(sexViolence_rate_per100000, na.rm = T)) %>%
+mutate(Continent = countrycode(Area_Region_Country, origin = "country.name", destination = "continent"))
+```
+Andiamo ad eseguire il solito scatter plot delle grandezze di interesse con le rette di regressione differenziate per Continente. Se queste ultime presenternno un andamento simile allora si andrà a considerare una retta unica.
+```{R}
+a = ggplot(b, aes(x = mMigrants, y = mSexViol, col = Continent)) +
+  geom_point(aes(label = Area_Region_Country), 
+             position = "jitter", alpha = .6, na.rm = T) +
+  labs(x = "Percentuale media di migranti", y = "Tasso medio di violenza sessuale") +
+  geom_smooth(method = "lm", se = F, size = 0.5) +
+  scale_colour_brewer(palette = "Set1") +
+  theme_light() 
+
+ggplotly(a, width = 900, height = 600)
+```
+Le rette di regressione presentano una pendenza diversa, e in ogni caso anche in questo caso non c'è nessuna evidente relazione lineare fra le grandezze.
+Andiamo a vedere se questo è confermato dai parametri dei modelli di regressione.
+```{r}
+# modello di regressione lineare senza variabile Continent
+mod1 = lm(mSexViol ~ mMigrants, data = b)
+summary(mod1)
+
+# modello con variabile "Continent" compresa 
+mod2 = lm(mSexViol ~ mMigrants + Continent, data = b)
+summary(mod2)
+# modello con interazione
+mod3 = lm(mSexViol ~ mMigrants*Continent, data = b)
+summary(mod3)
+# test di significatività del modello
+anova(mod1, mod2)
+anova(mod2,mod3)
+```
+Il modello migliore secondo i parametri di regressione è il terzo, ovvero quello che tiene conto dell'effetto della variabile *Continent* e dell'interazione. Vediamo che praticamente tutti i coefficienti non sono statisticamente significativi e questo andrbbe a confermare il fatto che fra le due grandezze non vi sia relazione lineare. L'indice $R^{2}$ corretto è circa pari al 22%, dunque un valore basso ma tutto sommato non competamente trascurabile.
+Nel seguito andremo a fare un'analisi dei residui più approfondita rispetto ai modelli precedenti. Per poter iniziare costruiamo delle funzioni che ci saranno utili successivamente.
+```{r}
+# indice dei 3 valori più grandi in un vettore
+largestN = function(x, N) {
+ndx <- order(x, decreasing = T)[1:N]  
+return(ndx)
+}
+# indice dei 3 valori più piccoli in un vettore
+smallestN = function(x, N) {
+  ndx = order(x)[1:N]
+  return(ndx)
+}
+# coefficiente angolare per costruire la qqline
+qqslope = function(vec) {
+  y <- quantile(vec[!is.na(vec)], c(0.25, 0.75))
+  x <- qnorm(c(0.25, 0.75))
+  slope <- diff(y)/diff(x)
+  return(slope)
+}
+# intercetta della qqline
+qqintercept = function(vec) {
+  y <- quantile(vec[!is.na(vec)], c(0.25, 0.75))
+  x <- qnorm(c(0.25, 0.75))
+  int <- y[1L] - (diff(y)/diff(x)) * x[1L]
+  return(int)
+}
+```
+### Diagnostica
+```{r}
+# salviamo tutti i valori utili ottenuti dal modello di regressione lineare nella tibble d
+d = as_tibble(augment(mod3)) %>% inner_join(b)
+head(d)
+# scatter plot residui vs tasso medio di migranti (linearità della relazione)
+ggplot(d, aes(x = mMigrants, y = .resid, label = Area_Region_Country)) +
+  geom_point(alpha = 0.4, col = "blue", position = "jitter") +
+  geom_hline(yintercept = 0, linetype="dashed", col = "red") +
+  geom_smooth(se = FALSE) +
+  geom_text_repel(data = d[c(largestN(d$.resid, 3),smallestN(d$.resid,3)),],
+                   nudge_y = 1) +
+  labs(x= "percentuale media di migranti", y = "residui") +
+  theme_light()
+```
+Vediamo che la disposizione dei residui non è ottimale, dovrebbero disporsi in maniera casuale e invece sembra che la maggior parte di questi giaccia sotto la retta $x = 0$. Vediamo che i valori più estremi sono relativi agli stati: Regno Unito, Maldive, Svezia, Guatemala, Canada e Belize.
+Vediamo allora l'istogramma dei residui.
+```{R}
+# Istogramma dei residui
+d %>%
+  ggplot(aes(.resid)) +
+  geom_histogram(aes(y =..density..), fill = "coral") +
+  labs(x = "Residui", y = "density") +
+  stat_function(fun=dnorm, color="red",
+                args=list(mean=mean(d$.resid, na.rm = T), 
+                          sd=sd(d$.resid, na.rm = T)))+
+  theme_light() 
+```
+Come già si intuiva dallo scatterplot la maggior parte dei residui è negativa, infatti si nota una forte concentrazione di punti al di sotto dello zero. Inoltre abbiamo l'occasione di notare una lunga coda a destra, sintomo di asimmetria positiva. Queste considerazioni mettono in dubbio la normalità dei residui.
+Di seguito allora utilizzeremo un altro strumento per valutare se i residui si distribuiscano effettivamente come una normale: il qqplot.
+
+```{R}
+# qqplot (normalità della distribuzione)
+a = ggplot(d, aes(label = Area_Region_Country)) +
+  stat_qq(aes(sample = .std.resid), col = "blue", alpha = 0.5) +
+  geom_abline(slope = qqslope(d$.std.resid),
+              intercept = qqintercept(d$.std.resid), linetype="dashed", col = "red") +
+  theme_light()
+
+# procedimento per inserire delle etichette
+d1<-ggplot_build(a)$data[[1]]
+# si deve riordinare perchè ggplot_build ordina i valori
+d1$Country = d$Area_Region_Country[order(d$.std.resid)]
+
+ggplot(d1, aes(x =theoretical,y = sample, label = Country)) + 
+  geom_point(alpha = 0.4, col = "blue") +
+  geom_label_repel(data = d1[c(1,2,3,114,115,116),], nudge_y = 0.5) + 
+  geom_abline(slope = qqslope(d$.std.resid),
+              intercept = qqintercept(d$.std.resid), linetype="dashed", col = "red") + 
+  theme_light()
+```
+Per costruire questo grafico dei residui si sono utilizzati i residui standardizzati, ovvero i residui trasformati in modo che abbiano media zero e vrianza unitaria. Anche da questo grafico è subito visibile il comportamento anomalo sulle code e vicino allo zero, tuttavia bisogna porre meno importanza alle code in quanto nel caso di un numero esiguo di dati, quindi come in questo caso, tendono ad essere instabili. 
+Vediamo che abbiamo localizzato un ulteriore valore "strano": Citta del Vaticano.
+Andiamo a vedere ora se nel nostro dataset sono presenti dei punti leva. Un punto si definisce leva in virtù del valore assunto dalle esplicative in quel punto rispetto
+agli altri, per effetto di queste, il modello tende ad avere un residuo (relativamente) piccolo in corrispondenza ad esso (ossia il modello è forzato a passarvi vicino). In sostanza un punto leva è un punto molto distante dalla massa di covariate, e già in precedenza abbiamo avuto modo di notare osservazioni di questo genere. Andiamo quindi ad utilizzare gli strumenti necessari per localizzarli.
+```{r}
+# punti leva
+# x vs h_ii
+d %>% 
+  ggplot(aes(mMigrants, .hat, label = Area_Region_Country)) +
+  geom_segment(aes(xend = mMigrants, yend = 0), col = "red", size = 0.8, alpha = 0.4) +
+  geom_label_repel(data = filter(d, .hat > 3*length(mod3$coefficients)/nrow(d)), nudge_y = 0.1) +
+  geom_abline(intercept = 3*length(mod3$coefficients)/nrow(d), slope = 0) + #soglia critica
+labs(x ="percentuale media di migranti", y = "h_ii") +
+  theme_light()
+```
+Il grafico ci mostra diversi punti leva, alcuni erano già stati notati ma si sono aggiunti alla lista dei punti "particolari" anche "Bermuda" e "Emirati Arabi Uniti".
+Andiamo a cercare di individuare i punti influenti, ovvero quei punti che determinano un grande cambiamento nelle stime dei parametri in caso di presenza/assenza dei punto stessi. Una misura di influenza è la distanza di Cook, tanto più graned è la distanza, tanto più influente sarà il punto.
+```{r}
+# osservazioni influenti
+# numero oss. vs distanza di Cook
+d %>% 
+ggplot(aes(as.numeric(.rownames), .cooksd, label = Area_Region_Country)) +
+  geom_col(fill = "orange") +
+  geom_label_repel(data = d[largestN(d$.cooksd,3),], nudge_y = 0.1) +
+  labs(x ="numero osservazione", y = "Distanza di Cook") +
+  theme_classic()
+```
+Abbiamo selezionato nel grafico i punti con distazna di Cook maggiore, vediamo che non sono nomi nuovi ma erano già stati nominati in precedenza per altre anomalie.
+Andiamo a commentare l'ultimo grafico per trovare i punti anomali, ovvero quelli che si discostano molto dal modello di regressione.
+```{r}
+# osservazioni da evidenziare
+d1= subset(d, .cooksd > .cooksd[order(-.cooksd)[4]] | .std.resid > 2.5 | 
+             .hat > 3*length(mod3$coefficients)/nrow(d))
+# leverage vs standard resid
+ggplot(d, aes(.hat, .std.resid, label = Area_Region_Country)) +
+  geom_point(aes(size=.cooksd), na.rm=TRUE, col = "blue", alpha = 0.5, show.legend = T) +
+  stat_smooth(method="loess", na.rm=TRUE, col = "red", linetype="dashed", se = F,
+              size = 0.5) +
+  xlab("Leverage")+ylab("Standardized Residuals") +
+  ggtitle("Residual vs Leverage Plot") +
+  scale_size_continuous("Cook's Distance", range=c(1,5)) +
+  geom_text_repel(data = d1, nudge_y = 0.1) +
+  theme_light() +
+  theme(legend.position="bottom")
+```
+Vediamo che in particolare in questo grafico andiamo a ritrovare tutti i punti che avevamo già commentato in precedenza. Facendo un riepilogo i punti più anomali sono: "United Kingdom" il quale si discosta molto dal modello e risulta essere anche influente, "Solomon Island" e "Holy See", i quali risultano essere punti leva e influenti allo stesso tempo.
+Vediamo se eliminando queste osservzioni la qualità del modello cambia vistosamente.
+```{r}
+b1 = b %>% filter(Area_Region_Country != "United Kingdom", 
+                  Area_Region_Country !="Solomon Island",
+                  Area_Region_Country != "Holy See")
+mod3new = lm(mSexViol ~ mMigrants*Continent, data = b1)
+
+tidy(mod3)
+tidy(mod3new)
+```
+Vediamo che le considerazioni sul modello valgono anche dopo aver rimosso i valori critici, è confermata l'assenza di relazione lineare fra il tasso medio di violenze sessuali e la percentuale media di migranti.
+```{r}
+# bontà del modello con valori anomali compresi
+glance(mod3)
+# bontà del modello senza valori anomali
+glance(mod3new)
+```
+Si nota come rimuovendo i valori critici aumentà la bontà di adattamento del modello. Infatti si vede che l'indice $R^2$ corretto è cresciuto vistosamente dopo aver rimosso le osservazioni particolari, raggiungendo un valore circa pari al 37%, quindi non affatto trascurabile. 
+
+# Conclusione
+In conclusione, una volta osservate le varie relazioni grafiche e i risultati ottenuti dalle regressioni, possiamo dire che non c'è una relazione diretta fra immigrazione e criminalità misurata in termini di tasso di aggressione e tasso di violenza sessuale.
+L'unica relazione che abbiamo colto è stata quella iperbolica fra tasso medio di omicidi e percentuale media di migranti che più che una relazione è un dato di fatto. Infatti sarebbe stupido dire che un basso numero di migranti causa un gran numero di omicidi, ma semplicemete gli stati più soggetti ad immigrazione sono quelli più industrializzati, peraltro caratterizzati da un basso tasso di omicidi. Al contrario, non sono mete dei movimenti migratori gli stati più poveri e instabili, putrtroppo caratterizzati da un elevato tasso di omicidi. 
+Dunque la questione riguardante il rapporto tra immigrazione e criminalità rimane una questione delicata che richiede un grande impegno nella gestione del fenomeno, tuttavia possiamo concludere che questa questione è erroneamente oggetto di propoganda politica anti-immigrazione, in quanto non c'è significativa correlazione tra aumento degli stranieri e aumento dei crimini. 
