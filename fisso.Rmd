@@ -3,7 +3,7 @@ title: "Criminalità e immigrazione: fenomeni in relazione o strumento di propaga
 author: "Gianluca Iacubino"
 output: 
     html_document:
-       df_print: paged
+       df_print: "paged"
        theme: cerulean
        toc: true
        number_sections: true
@@ -420,7 +420,7 @@ Andiamo ora ad analizzare l'ultimo tipo di crimine: la violenza sessuale. Per il
 # inseriamo la colonna ISO
 sexViolence = mutate(sexViolence, ISO = countrycode(Country_territory, origin = "country.name", destination = "iso2c"))
 ```
-Per la stessa ragione di prima andremo a verificare se persiste il medesimo problema riscontrato per L'ISO del Regno Unito nei dataset **assault** e **robbery**.
+Per la stessa ragione di prima andremo a verificare se persiste il medesimo problema riscontrato per L'ISO del Regno Unito nei dataset **assault**.
 
 ```{R}
 # ci dovrebbe essere un solo codice ISO in corrispondenza ad ogni anno
@@ -439,7 +439,7 @@ sexViolence = bind_rows(sexViolence,b1)
 
 sexViolence %>% count(Year, ISO) %>% filter(n >1)
 ```
-Come fatto in precedenza andiamo a visualizzare gli stati che presebtano una maggior concentrazione di questo crimine.
+Come fatto in precedenza andiamo a visualizzare gli stati che presentano una maggior concentrazione di questo crimine.
 ```{R}
 # violenze sessuali nel mondo mappando size
 a = sexViolence %>% filter(sexViolence_rate_per100000 > 18) %>% # 18 è poco superiore alla mediana
@@ -456,7 +456,7 @@ ggplotly(a, width = 900, height = 600) %>% animation_opts(transition = 0, redraw
 
 ```
 A causa della mancanza di molti dati è difficile trarre qualche conclusione. Il numero di punti aumenta nel tempo ma in molti casi perchè per i primi anni non si era a conoscienza del valore dell'indice (NA nel dataframe). Guardando all'Europa la situazione non sembra chiara, all'inizio sembra che il fenomeno aumenti con una relativa diminuzione verso gli ultimi anni.
-Come per gli altri tipi di crimine andiamo a graficare nellamappa i paesi con più immigrazione e con più episodi di violenza sessuale.
+Come per gli altri tipi di crimine andiamo a graficare nella mappa i paesi con più immigrazione e con più episodi di violenza sessuale.
 
 ```{R}
 # immigrazione eviolenze sessuali insieme
