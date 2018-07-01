@@ -1,5 +1,5 @@
 ---
-title: "Criminalità e immigrazione: fenomeni in relazione o strumento di proaganda?"
+title: "Criminalità e immigrazione: fenomeni in relazione o strumento di propaganda?"
 author: "Gianluca Iacubino"
 output: 
     html_document:
